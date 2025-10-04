@@ -7,13 +7,14 @@ const testimonialRoutes = require("./routes/Testimonial");
 const messageRoute = require('./routes/HayCon');
 const haySubRoutes = require('./routes/HaySub');
 const hayLinksRoutes = require("./routes/HayLinks")
-
+const hayMeetRoutes = require("./routes/HayMeet");
 dotenv.config();
 
 const app = express();
 
 app.use(express.json()); 
 app.use(cors());
+app.use("/api/haymeet", hayMeetRoutes);
 app.use("/api/HaySquare", haysquareRoutes); 
 app.use('/api/hayblog/', hayblogRoutes);
 app.use("/api/Testimonial", testimonialRoutes);
