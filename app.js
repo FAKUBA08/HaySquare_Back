@@ -8,6 +8,7 @@ const messageRoute = require('./routes/HayCon');
 const haySubRoutes = require('./routes/HaySub');
 const hayLinksRoutes = require("./routes/HayLinks")
 const hayMeetRoutes = require("./routes/HayMeet");
+const messageRoutes = require("./routes/HayMes")
 dotenv.config();
 
 const app = express();
@@ -21,6 +22,7 @@ app.use("/api/Testimonial", testimonialRoutes);
 app.use('/api/HayCon/', messageRoute);
 app.use('/api/HaySub/', haySubRoutes);
 app.use("/api/HayLinks", hayLinksRoutes);
+app.use("/api/messages", messageRoutes);
 app.get("/", (req, res) => {
   res.send("Hello, World!");
 });

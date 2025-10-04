@@ -1,86 +1,65 @@
-// Load environment variables
+// ---------------- LOAD ENV ----------------
 const dotenv = require("dotenv");
 dotenv.config();
 
+// ---------------- IMPORTS ----------------
 const http = require("http");
 const mongoose = require("mongoose");
 const { Server } = require("socket.io");
-const app = require("./app");
-const User = require("./models/User");
+const app = require("./app"); // your existing Express app
 
-// ---------------- MONGO DB ----------------
+// ---------------- MONGODB CONNECTION ----------------
 mongoose
-  .connect(process.env.MONGO_URI)
-  .then(() => console.log("MongoDB connected"))
-  .catch((err) => console.error("MongoDB connection error:", err));
+  .connect(process.env.MONGO_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => console.log("✅ MongoDB connected"))
+  .catch((err) => console.error("❌ MongoDB connection error:", err));
 
-// ---------------- HTTP & SOCKET.IO ----------------
+// ---------------- HTTP SERVER ----------------
 const server = http.createServer(app);
 
+// ---------------- SOCKET.IO ----------------
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: "*", // allow all for now; restrict later if needed
     methods: ["GET", "POST"],
   },
 });
 
 // ---------------- SOCKET.IO LOGIC ----------------
-
-// Map of connected users: userId -> socketId
-const users = new Map();
+const users = new Map(); // userId -> socket.id
 let adminSocket = null;
 
 io.on("connection", (socket) => {
   console.log("🟢 New client connected:", socket.id);
 
-  // ---------------- USER CONNECT ----------------
-  socket.on("user_connected", async (userId) => {
+  // 🔹 User connects
+  socket.on("user_connected", (userId) => {
     users.set(userId, socket.id);
     console.log(`👤 User connected: ${userId}`);
-
-    // Persist user in DB
-    try {
-      await User.findOneAndUpdate(
-        { userId },
-        { active: true },
-        { upsert: true }
-      );
-    } catch (err) {
-      console.error("❌ Error saving user:", err);
-    }
-
     if (adminSocket) {
-      adminSocket.emit("user_list", await getActiveUsers());
+      adminSocket.emit("user_list", Array.from(users.keys()));
     }
   });
 
-  // ---------------- ADMIN CONNECT ----------------
-  socket.on("admin_connected", async () => {
+  // 🔹 Admin connects
+  socket.on("admin_connected", () => {
     adminSocket = socket;
     console.log("🧑‍💼 Admin connected");
-    adminSocket.emit("user_list", await getActiveUsers());
+    adminSocket.emit("user_list", Array.from(users.keys()));
   });
 
-  // ---------------- USER MESSAGE ----------------
-  socket.on("user_message", async (data) => {
+  // 🔹 User sends a message → send to admin
+  socket.on("user_message", (data) => {
     console.log(`💬 User(${data.userId}): ${data.message}`);
-
-    // Update last message in DB
-    try {
-      await User.findOneAndUpdate(
-        { userId: data.userId },
-        { lastMessage: data.message }
-      );
-    } catch (err) {
-      console.error("❌ Error updating user message:", err);
-    }
-
     if (adminSocket) {
       adminSocket.emit("receive_message", data);
     }
   });
 
-  // ---------------- ADMIN REPLY ----------------
+  // 🔹 Admin replies → send to specific user
   socket.on("admin_reply", (data) => {
     const userSocketId = users.get(data.userId);
     if (userSocketId) {
@@ -92,66 +71,29 @@ io.on("connection", (socket) => {
     }
   });
 
-  // ---------------- DELETE USER ----------------
-  socket.on("delete_user", async (userId) => {
-    try {
-      // Remove from memory
-      users.delete(userId);
-
-      // Remove from DB
-      await User.findOneAndDelete({ userId });
-      console.log(`🗑️ User deleted: ${userId}`);
-
-      // Notify admin
-      if (adminSocket) {
-        adminSocket.emit("user_list", await getActiveUsers());
-      }
-
-      // Notify the deleted user if online
-      const userSocketId = users.get(userId);
-      if (userSocketId) {
-        io.to(userSocketId).emit("user_deleted");
-      }
-    } catch (err) {
-      console.error("❌ Error deleting user:", err);
-    }
-  });
-
-  // ---------------- DISCONNECT ----------------
-  socket.on("disconnect", async () => {
+  // 🔹 Handle disconnect
+  socket.on("disconnect", () => {
     console.log("🔴 Client disconnected:", socket.id);
 
+    // Remove disconnected user
     for (const [userId, sockId] of users.entries()) {
       if (sockId === socket.id) {
         users.delete(userId);
         console.log(`🚫 User disconnected: ${userId}`);
-
-        // Mark user inactive in DB
-        try {
-          await User.findOneAndUpdate({ userId }, { active: false });
-        } catch (err) {
-          console.error("❌ Error updating user status:", err);
-        }
-
         if (adminSocket) {
-          adminSocket.emit("user_list", await getActiveUsers());
+          adminSocket.emit("user_list", Array.from(users.keys()));
         }
         break;
       }
     }
 
+    // Check if admin disconnected
     if (socket.id === adminSocket?.id) {
       adminSocket = null;
       console.log("❌ Admin disconnected");
     }
   });
 });
-
-// ---------------- HELPER ----------------
-async function getActiveUsers() {
-  const usersDB = await User.find({ active: true }).select("userId lastMessage");
-  return usersDB.map((u) => ({ userId: u.userId, lastMessage: u.lastMessage }));
-}
 
 // ---------------- START SERVER ----------------
 const PORT = process.env.PORT || 3000;
