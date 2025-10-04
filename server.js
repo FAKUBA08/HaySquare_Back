@@ -4,9 +4,19 @@ dotenv.config();
 
 // ---------------- IMPORTS ----------------
 const http = require("http");
+const express = require("express");
 const mongoose = require("mongoose");
 const { Server } = require("socket.io");
+const cors = require("cors");
+
 const app = require("./app"); // your existing Express app
+
+// ---------------- CORS ----------------
+app.use(cors({
+  origin: "http://localhost:5173", // frontend URL
+  methods: ["GET","POST","DELETE","PUT","PATCH"],
+  credentials: true,
+}));
 
 // ---------------- MONGODB CONNECTION ----------------
 mongoose
@@ -23,10 +33,13 @@ const server = http.createServer(app);
 // ---------------- SOCKET.IO ----------------
 const io = new Server(server, {
   cors: {
-    origin: "*", // allow all for now; restrict later if needed
+    origin: "http://localhost:5173",
     methods: ["GET", "POST"],
   },
 });
+
+// Make io accessible in routes
+app.set("io", io);
 
 // ---------------- SOCKET.IO LOGIC ----------------
 const users = new Map(); // userId -> socket.id

@@ -9,9 +9,11 @@ const haySubRoutes = require('./routes/HaySub');
 const hayLinksRoutes = require("./routes/HayLinks")
 const hayMeetRoutes = require("./routes/HayMeet");
 const messageRoutes = require("./routes/HayMes")
+const userRoute = require("./routes/User");
 dotenv.config();
 
 const app = express();
+app.use("/api/users", userRoute);
 
 app.use(express.json()); 
 app.use(cors());
