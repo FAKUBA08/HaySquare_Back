@@ -11,12 +11,14 @@ const hayMeetRoutes = require("./routes/HayMeet");
 const messageRoutes = require("./routes/HayMes")
 const userRoute = require("./routes/User");
 dotenv.config();
-
+const path = require("path");
 const app = express();
 app.use("/api/users", userRoute);
 
 app.use(express.json()); 
 app.use(cors());
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
 app.use("/api/haymeet", hayMeetRoutes);
 app.use("/api/HaySquare", haysquareRoutes); 
 app.use('/api/hayblog/', hayblogRoutes);
