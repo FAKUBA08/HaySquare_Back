@@ -49,10 +49,10 @@ const allowedMimes = [
 const upload = multer({
   storage,
   fileFilter: (req, file, cb) => cb(null, allowedMimes.includes(file.mimetype)),
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB max
+  limits: { fileSize: 20 * 1024 * 1024 }, 
 });
 
-// ---------------- HELPERS ----------------
+
 const validSenders = new Set(["user", "admin"]);
 
 const makeFileUrl = (filename, req) => {
