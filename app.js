@@ -12,6 +12,8 @@ const messageRoutes = require("./routes/HayMes")
 const userRoute = require("./routes/User");
 const paymentRoute=require("./routes/paymentRoute");
 const buyerRoutes = require('./routes/buyerRoutes');
+const buyerFavouritesRoutes = require('./routes/buyerFavouritesRoutes');
+const gigRoutes = require('./routes/gigRoutes');
 dotenv.config();
 const path = require("path");
 const app = express();
@@ -20,8 +22,7 @@ app.use("/api/users", userRoute);
 app.use(express.json()); 
 app.use(cors());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-const gigRoutes = require('./routes/gigRoutes');
-
+app.use('/api/buyer-favourites', buyerFavouritesRoutes);
 app.use('/api/gig', gigRoutes)
 app.use("/api/haymeet", hayMeetRoutes);
 app.use("/api/HaySquare", haysquareRoutes); 
