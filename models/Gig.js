@@ -5,13 +5,14 @@ const packageSchema = new mongoose.Schema({
   title: { type: String, required: true },
   description: { type: String },
   price: { type: Number, required: true },
+  deliveryTime: { type: String, required: false }, // ✅ Added delivery time
 });
 
 // Main Gig schema
 const gigSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
-    description: { type: String, required:false },
+    description: { type: String, required: false },
 
     // Main image
     image: {

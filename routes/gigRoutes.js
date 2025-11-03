@@ -18,7 +18,10 @@ router.post('/add', multiUpload, async (req, res) => {
 
     const imageFile = req.files?.image?.[0];
     const image = imageFile
-      ? { data: imageFile.buffer.toString('base64'), contentType: imageFile.mimetype }
+      ? {
+          data: imageFile.buffer.toString('base64'),
+          contentType: imageFile.mimetype,
+        }
       : null;
 
     const newGig = new Gig({
@@ -67,7 +70,10 @@ router.put('/update/:id', multiUpload, async (req, res) => {
 
     const imageFile = req.files?.image?.[0];
     const image = imageFile
-      ? { data: imageFile.buffer.toString('base64'), contentType: imageFile.mimetype }
+      ? {
+          data: imageFile.buffer.toString('base64'),
+          contentType: imageFile.mimetype,
+        }
       : undefined;
 
     const updatedGig = await Gig.findByIdAndUpdate(
