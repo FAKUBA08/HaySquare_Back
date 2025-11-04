@@ -1,12 +1,11 @@
+// routes/messages.js
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
 const fs = require("fs");
 const fsPromises = fs.promises;
 const path = require("path");
-const cron = require("node-cron");
 const axios = require("axios");
-const postmark = require("postmark");
 const zlib = require("zlib");
 const sharp = require("sharp");
 const ffmpeg = require("fluent-ffmpeg");
@@ -17,15 +16,13 @@ ffmpeg.setFfmpegPath(ffmpegPath);
 
 // ---------------- ENV VARIABLES ----------------
 const {
-  POSTMARK_API_KEY,
   EMAIL_USER,
   ZOOM_ACCOUNT_ID,
   ZOOM_CLIENT_ID,
   ZOOM_CLIENT_SECRET,
+  FRONTEND_URL,
+  NODE_ENV,
 } = process.env;
-
-const POSTMARK_ENABLED = Boolean(POSTMARK_API_KEY && EMAIL_USER);
-const client = POSTMARK_ENABLED ? new postmark.ServerClient(POSTMARK_API_KEY) : null;
 
 // ---------------- FILE STORAGE ----------------
 const uploadDir = path.join(__dirname, "../uploads");
@@ -40,18 +37,21 @@ const storage = multer.diskStorage({
 });
 
 const allowedMimes = [
-  "image/jpeg", "image/png", "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/gif",
   "application/pdf",
-  "video/mp4", "video/quicktime",
-  "text/plain", "application/zip",
+  "video/mp4",
+  "video/quicktime",
+  "text/plain",
+  "application/zip",
 ];
 
 const upload = multer({
   storage,
   fileFilter: (req, file, cb) => cb(null, allowedMimes.includes(file.mimetype)),
-  limits: { fileSize: 20 * 1024 * 1024 }, 
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB limit
 });
-
 
 const validSenders = new Set(["user", "admin"]);
 
@@ -61,19 +61,46 @@ const makeFileUrl = (filename, req) => {
   return `${protocol}://${host}/uploads/${filename}`;
 };
 
-async function notifyPostmark(userId, message) {
-  if (!POSTMARK_ENABLED) return;
+// ---------------- NOTIFICATIONS (WhatsApp) ----------------
+// Using WhatsApp "wa.me" link format. Note: server cannot push message to a phone
+// unless using WhatsApp Business API. This will construct a clickable link and attempt
+// a GET request (which will return HTML). We log the URL so you can click it or forward.
+const ADMIN_WHATSAPP_NUMBER = "2349025479011"; // from user (without +). Adjust if needed.
+
+function adminLoginLink() {
+  if (NODE_ENV === "production" && FRONTEND_URL) {
+    return `${FRONTEND_URL.replace(/\/$/, "")}/adminlogin`;
+  }
+  return "http://localhost:5173/#/adminlogin";
+}
+
+async function notifyAdminViaWhatsApp(userId, previewText) {
   try {
-    await client.sendEmail({
-      From: EMAIL_USER,
-      To: EMAIL_USER,
-      Subject: `New message from ${userId}`,
-      TextBody: `User ${userId} sent:\n\n${message}`,
-      MessageStream: "outbound",
+    const loginUrl = adminLoginLink();
+    const text = `🟢 New Chat Message
+From: ${userId}
+${previewText}
+
+Admin login: ${loginUrl}`;
+
+    const encoded = encodeURIComponent(text);
+    const waUrl = `https://wa.me/${ADMIN_WHATSAPP_NUMBER}?text=${encoded}`;
+
+    // Log the link (useful in server logs)
+    console.log("🔔 WhatsApp notification link:", waUrl);
+
+    // Try to call the wa.me URL (this will not send a WhatsApp message from server
+    // to the phone — it's a convenience attempt and will return HTML). If you want
+    // real programmatic delivery, integrate WhatsApp Business API.
+    await axios.get(waUrl, { timeout: 5000 }).catch((err) => {
+      // non-fatal: log and continue
+      console.warn("wa.me request notice (non-fatal):", err.message || err.toString());
     });
-    console.log("📧 Postmark notification sent");
+
+    return waUrl;
   } catch (err) {
-    console.error("Postmark error:", err);
+    console.error("notifyAdminViaWhatsApp error:", err);
+    return null;
   }
 }
 
@@ -94,13 +121,15 @@ async function compressFile(filePath, mimetype) {
   const stats = await fsPromises.stat(filePath);
 
   if (stats.size <= 1024 * 1024) {
-    return filePath; // No need to compress if < 1MB
+    // No need to compress if <= 1MB
+    return filePath;
   }
 
   console.log(`🌀 Compressing ${mimetype} file: ${path.basename(filePath)}`);
 
   // --- Image compression ---
   if (mimetype.startsWith("image")) {
+    // convert to jpeg compressed as default; if original is png/gif you'll get jpeg
     await sharp(filePath)
       .resize({ width: 1280, withoutEnlargement: true })
       .jpeg({ quality: 70 })
@@ -123,13 +152,16 @@ async function compressFile(filePath, mimetype) {
     const input = fs.createReadStream(filePath);
     const output = fs.createWriteStream(compressedPath + ".gz");
     await new Promise((resolve, reject) => {
-      input.pipe(zlib.createGzip()).pipe(output)
+      input
+        .pipe(zlib.createGzip())
+        .pipe(output)
         .on("finish", resolve)
         .on("error", reject);
     });
     return compressedPath + ".gz";
   }
 
+  // remove original file if compressed successfully
   await fsPromises.unlink(filePath).catch(() => {});
   return compressedPath;
 }
@@ -162,7 +194,14 @@ router.post("/", basicValidateMessage, async (req, res) => {
         ? io.to(userId).emit("receive_message", newMessage)
         : io.to("admins").emit("receive_message", newMessage);
 
-    if (sender === "user") notifyPostmark(userId, message);
+    // Notify admin via WhatsApp link instead of Postmark email (only for user messages)
+    if (sender === "user") {
+      // include a short preview: first 200 chars
+      const preview = message.length > 200 ? `${message.slice(0, 197)}...` : message;
+      notifyAdminViaWhatsApp(userId, preview).catch((e) => {
+        console.error("WhatsApp notify failed:", e);
+      });
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to save message" });
@@ -189,6 +228,7 @@ router.post("/upload", upload.single("file"), basicValidateMessage, async (req, 
       ? "pdf"
       : "document";
 
+    const stats = await fsPromises.stat(compressedPath).catch(() => ({ size: file.size }));
     const newMessage = await new HayMes({
       userId,
       sender,
@@ -197,7 +237,7 @@ router.post("/upload", upload.single("file"), basicValidateMessage, async (req, 
       fileName: finalName,
       originalName: file.originalname,
       mimeType: mimetype,
-      size: (await fsPromises.stat(compressedPath)).size,
+      size: stats.size,
     }).save();
 
     res.status(201).json(newMessage);
@@ -208,33 +248,19 @@ router.post("/upload", upload.single("file"), basicValidateMessage, async (req, 
         ? io.to(userId).emit("receive_message", newMessage)
         : io.to("admins").emit("receive_message", newMessage);
 
-    if (sender === "user") notifyPostmark(userId, `Uploaded file: ${file.originalname}`);
+    // Notify admin via WhatsApp link instead of Postmark email (only for user uploads)
+    if (sender === "user") {
+      const preview = `Uploaded file: ${file.originalname}`;
+      notifyAdminViaWhatsApp(userId, preview).catch((e) => {
+        console.error("WhatsApp notify failed:", e);
+      });
+    }
   } catch (err) {
     console.error("❌ Compression/upload error:", err);
     res.status(500).json({ error: "File upload failed" });
   }
 });
 
-// CRON cleanup
-cron.schedule("0 * * * *", async () => {
-  try {
-    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const oldMsgs = await HayMes.find({ createdAt: { $lt: cutoff } });
-
-    for (const msg of oldMsgs) {
-      if (msg.fileName) {
-        try {
-          await fsPromises.unlink(path.join(uploadDir, msg.fileName));
-        } catch (e) {
-          if (e.code !== "ENOENT") console.error(e);
-        }
-      }
-      await HayMes.deleteOne({ _id: msg._id });
-    }
-    console.log("🧹 Old messages/files cleaned");
-  } catch (err) {
-    console.error("Cron error:", err);
-  }
-});
+// NOTE: Removed cron cleanup — messages and files are persisted indefinitely now.
 
 module.exports = router;

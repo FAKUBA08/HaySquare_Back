@@ -9,6 +9,7 @@ const haySubRoutes = require('./routes/HaySub');
 const hayLinksRoutes = require("./routes/HayLinks")
 const hayMeetRoutes = require("./routes/HayMeet");
 const messageRoutes = require("./routes/HayMes")
+const orderRoutes = require("./routes/HayOrderMes");
 const userRoute = require("./routes/User");
 const paymentRoute=require("./routes/paymentRoute");
 const buyerRoutes = require('./routes/buyerRoutes');
@@ -32,6 +33,7 @@ app.use('/api/HayCon/', messageRoute);
 app.use('/api/HaySub/', haySubRoutes);
 app.use("/api/HayLinks", hayLinksRoutes);
 app.use("/api/messages", messageRoutes);
+app.use("/api/orderMessages", orderRoutes);
 app.use("/api/payments", paymentRoute);
 app.use('/api/buyers', buyerRoutes);
 app.get("/", (req, res) => {

@@ -12,11 +12,13 @@ const cors = require("cors");
 const app = require("./app"); // your existing Express app
 
 // ---------------- CORS ----------------
-app.use(cors({
-  origin: "http://localhost:5173", // frontend URL
-  methods: ["GET","POST","DELETE","PUT","PATCH"],
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: "http://localhost:5173",
+    methods: ["GET", "POST", "DELETE", "PUT", "PATCH"],
+    credentials: true,
+  })
+);
 
 // ---------------- MONGODB CONNECTION ----------------
 mongoose
@@ -42,65 +44,120 @@ const io = new Server(server, {
 app.set("io", io);
 
 // ---------------- SOCKET.IO LOGIC ----------------
-const users = new Map(); // userId -> socket.id
+const users = new Map(); // userId -> { socketId, active, lastMessage, typing }
 let adminSocket = null;
 
 io.on("connection", (socket) => {
   console.log("🟢 New client connected:", socket.id);
 
-  // 🔹 User connects
+  // ---------------- USER CONNECT ----------------
   socket.on("user_connected", (userId) => {
-    users.set(userId, socket.id);
+    const existing = users.get(userId);
+    users.set(userId, {
+      socketId: socket.id,
+      active: true,
+      lastMessage: existing?.lastMessage || "",
+      typing: false,
+    });
     console.log(`👤 User connected: ${userId}`);
     if (adminSocket) {
-      adminSocket.emit("user_list", Array.from(users.keys()));
+      adminSocket.emit("user_list", Array.from(users.entries()).map(([id, u]) => ({
+        userId: id,
+        active: u.active,
+        lastMessage: u.lastMessage,
+        typing: u.typing,
+        firstMessageSent: true,
+      })));
     }
   });
 
-  // 🔹 Admin connects
+  // ---------------- ADMIN CONNECT ----------------
   socket.on("admin_connected", () => {
     adminSocket = socket;
     console.log("🧑‍💼 Admin connected");
-    adminSocket.emit("user_list", Array.from(users.keys()));
+    adminSocket.emit("user_list", Array.from(users.entries()).map(([id, u]) => ({
+      userId: id,
+      active: u.active,
+      lastMessage: u.lastMessage,
+      typing: u.typing,
+      firstMessageSent: true,
+    })));
   });
 
-  // 🔹 User sends a message → send to admin
+  // ---------------- USER MESSAGE ----------------
   socket.on("user_message", (data) => {
-    console.log(`💬 User(${data.userId}): ${data.message}`);
+    const { userId, message, type = "text" } = data;
+    console.log(`💬 User(${userId}): ${message}`);
+    const user = users.get(userId);
+    if (user) {
+      user.lastMessage = message;
+      users.set(userId, user);
+    }
     if (adminSocket) {
-      adminSocket.emit("receive_message", data);
+      adminSocket.emit("receive_message", { userId, message, sender: "user", type });
     }
   });
 
-  // 🔹 Admin replies → send to specific user
+  // ---------------- ADMIN REPLY ----------------
   socket.on("admin_reply", (data) => {
-    const userSocketId = users.get(data.userId);
-    if (userSocketId) {
-      io.to(userSocketId).emit("receive_message", {
-        sender: "admin",
-        message: data.message,
-      });
-      console.log(`🧑‍💼 Admin → ${data.userId}: ${data.message}`);
+    const { userId, message, type = "text" } = data;
+    const user = users.get(userId);
+    if (user) {
+      io.to(user.socketId).emit("receive_message", { sender: "admin", message, type });
+      user.lastMessage = message;
+      users.set(userId, user);
+      console.log(`🧑‍💼 Admin → ${userId}: ${message}`);
     }
   });
 
-  // 🔹 Handle disconnect
+  // ---------------- TYPING EVENTS ----------------
+  socket.on("user_typing", (userId) => {
+    const user = users.get(userId);
+    if (user) {
+      user.typing = true;
+      users.set(userId, user);
+      if (adminSocket) adminSocket.emit("user_typing", userId);
+      setTimeout(() => {
+        user.typing = false;
+        users.set(userId, user);
+        if (adminSocket) adminSocket.emit("user_typing", userId);
+      }, 2000);
+    }
+  });
+
+  socket.on("admin_typing", (userId) => {
+    const user = users.get(userId);
+    if (user) {
+      io.to(user.socketId).emit("admin_typing");
+    }
+  });
+
+  // ---------------- DISCONNECT ----------------
   socket.on("disconnect", () => {
     console.log("🔴 Client disconnected:", socket.id);
 
-    // Remove disconnected user
-    for (const [userId, sockId] of users.entries()) {
-      if (sockId === socket.id) {
-        users.delete(userId);
+    // Mark users as inactive rather than removing
+    for (const [userId, u] of users.entries()) {
+      if (u.socketId === socket.id) {
+        users.set(userId, { ...u, active: false });
         console.log(`🚫 User disconnected: ${userId}`);
         if (adminSocket) {
-          adminSocket.emit("user_list", Array.from(users.keys()));
+          adminSocket.emit(
+            "user_list",
+            Array.from(users.entries()).map(([id, u]) => ({
+              userId: id,
+              active: u.active,
+              lastMessage: u.lastMessage,
+              typing: u.typing,
+              firstMessageSent: true,
+            }))
+          );
         }
         break;
       }
     }
 
-    // Check if admin disconnected
+    // Admin disconnect
     if (socket.id === adminSocket?.id) {
       adminSocket = null;
       console.log("❌ Admin disconnected");
