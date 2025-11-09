@@ -8,6 +8,7 @@ const zlib = require("zlib");
 const sharp = require("sharp");
 const ffmpeg = require("fluent-ffmpeg");
 const ffmpegPath = require("ffmpeg-static");
+const mongoose = require("mongoose");
 const HayOrderMes = require("../models/HayOrderMes");
 
 ffmpeg.setFfmpegPath(ffmpegPath);
@@ -108,6 +109,19 @@ router.post("/", basicValidateMessage, async (req, res) => {
     if (!message || !message.trim()) return res.status(400).json({ error: "Message cannot be empty" });
 
     const newMessage = await new HayOrderMes({ userId, sender, message, type: type || "text" }).save();
+
+    // Emit admin message to user if sender is admin
+    if (sender === "admin" && req.app.get("io")) {
+      const io = req.app.get("io");
+      io.to(userId).emit("receive_message", {
+        userId,
+        sender,
+        message,
+        type: type || "text",
+        timestamp: newMessage.createdAt,
+      });
+    }
+
     res.status(201).json(newMessage);
   } catch (err) {
     console.error(err);
@@ -145,6 +159,17 @@ router.post("/upload", upload.single("file"), basicValidateMessage, async (req, 
       },
     }).save();
 
+    if (sender === "admin" && req.app.get("io")) {
+      const io = req.app.get("io");
+      io.to(userId).emit("receive_message", {
+        userId,
+        sender,
+        message: fileUrl,
+        type,
+        timestamp: newMessage.createdAt,
+      });
+    }
+
     res.status(201).json(newMessage);
   } catch (err) {
     console.error("Upload error:", err);
@@ -170,21 +195,66 @@ router.post("/offer", async (req, res) => {
       return res.status(400).json({ error: "Price must be a valid number greater than 0" });
     }
 
+    const offerId = new mongoose.Types.ObjectId();
     const newOffer = await new HayOrderMes({
       userId,
       sender: "admin",
       message: `Offer: ${shortContent}`,
       type: "offer",
       packageType,
-      shortContent,
       price: parsedPrice,
       duration,
+      meta: {
+        offer: {
+          _id: offerId,
+          title: shortContent,
+          price: parsedPrice,
+          duration,
+          packages: {
+            basic: { price: parsedPrice, deliveryTime: duration }
+          }
+        },
+        packageKey: "basic",
+        shortContent,
+      }
     }).save();
+
+    if (req.app.get("io")) {
+      const io = req.app.get("io");
+      io.to(userId).emit("receive_message", {
+        userId,
+        sender: "admin",
+        message: `Offer: ${shortContent}`,
+        type: "offer",
+        price: parsedPrice,
+        duration,
+        timestamp: newOffer.createdAt,
+      });
+    }
 
     res.status(201).json(newOffer);
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to post offer" });
+  }
+});
+
+// Cancel offer
+router.post("/cancelOffer", async (req, res) => {
+  try {
+    const { userId, offerId } = req.body;
+    if (!userId || !offerId) return res.status(400).json({ error: "userId and offerId required" });
+
+    const deleted = await HayOrderMes.deleteMany({
+      userId,
+      type: "offer",
+      $or: [{ _id: offerId }, { "meta.offer._id": offerId }]
+    });
+
+    res.json({ success: true, deletedCount: deleted.deletedCount });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to cancel offer" });
   }
 });
 
@@ -205,6 +275,17 @@ router.post("/delivery", async (req, res) => {
       workDone,
     }).save();
 
+    if (req.app.get("io")) {
+      const io = req.app.get("io");
+      io.to(userId).emit("receive_message", {
+        userId,
+        sender: "admin",
+        message: `Delivery completed: ${workDone}`,
+        type: "delivery",
+        timestamp: newDelivery.createdAt,
+      });
+    }
+
     res.status(201).json(newDelivery);
   } catch (err) {
     console.error(err);
@@ -213,25 +294,42 @@ router.post("/delivery", async (req, res) => {
 });
 
 // ---------------- ORDER MANAGEMENT ----------------
-
-// Create a new order
 router.post("/orders", async (req, res) => {
   try {
-    const { userId, orderId, message } = req.body;
-    if (!userId || !orderId || !message)
+    const { userId, orderId, message, packageType, price, duration } = req.body;
+    if (!userId || !orderId || !message || !packageType || !price || !duration) {
       return res.status(400).json({ error: "All fields are required" });
+    }
 
- const newOrder = await new HayOrderMes({
-  userId,
-  sender: "admin",
-  message,
-  type: "order",
-  orderId,
-  status: "pending",
-  price: Number(price),       // convert to Number
-  duration: Number(duration), // convert to Number
-}).save();
+    const parsedPrice = Number(price);
+    if (isNaN(parsedPrice) || parsedPrice <= 0) {
+      return res.status(400).json({ error: "Price must be a valid number greater than 0" });
+    }
 
+    const newOrder = await new HayOrderMes({
+      userId,
+      sender: "admin",
+      message,
+      type: "order",
+      orderId,
+      status: "pending",
+      packageType,
+      price: parsedPrice,
+      duration,
+    }).save();
+
+    if (req.app.get("io")) {
+      const io = req.app.get("io");
+      io.to(userId).emit("receive_message", {
+        userId,
+        sender: "admin",
+        message,
+        type: "order",
+        price: parsedPrice,
+        duration,
+        timestamp: newOrder.createdAt,
+      });
+    }
 
     res.status(201).json(newOrder);
   } catch (err) {
