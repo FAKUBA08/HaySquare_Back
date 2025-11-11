@@ -5,7 +5,21 @@ const Buyer = require('../models/Buyer');
 const { authenticateToken } = require('../authMiddleWare');
 const { ServerClient } = require('postmark');
 require('dotenv').config();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 
+const uploadDir = path.join(__dirname, '../uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename: (req, file, cb) => {
+    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, `${unique}${path.extname(file.originalname)}`);
+  },
+});
+const upload = multer({ storage });
 const router = express.Router();
 const postmarkClient = new ServerClient(process.env.POSTMARK_API_KEY);
 
@@ -20,7 +34,7 @@ const EMAIL_FOOTER = `
   <p style="font-size:12px;color:#aaa;">&copy; ${new Date().getFullYear()} ${APP_NAME}. All rights reserved.</p>
 `;
 
-// Automatically handle URLs for local and production
+// Handle URLs for local and production
 const BACKEND_URL =
   process.env.NODE_ENV === 'production'
     ? process.env.BACKEND_URL
@@ -127,6 +141,7 @@ router.post('/buyerLogin', async (req, res) => {
         fullName: buyer.fullName,
         email: buyer.email,
         isVerified: buyer.isVerified,
+        profileImg: buyer.profileImg,
       },
     });
   } catch (error) {
@@ -252,7 +267,6 @@ router.post('/forgot-password', async (req, res) => {
 });
 
 // ====================== RESET PASSWORD ======================
-// ====================== RESET PASSWORD ======================
 router.post('/reset-password/:token', async (req, res) => {
   try {
     const { token } = req.params;
@@ -279,25 +293,7 @@ router.post('/reset-password/:token', async (req, res) => {
   }
 });
 
-// ====================== DASHBOARD ======================
-router.get('/dashboard', authenticateToken, async (req, res) => {
-  try {
-    const buyer = await Buyer.findById(req.user.id).select('fullName email _id');
-
-    if (!buyer)
-      return res.status(404).json({ message: 'Buyer not found' });
-
-    res.status(200).json({
-      fullName: buyer.fullName,
-      email: buyer.email,
-      buyerId: buyer._id,
-    });
-  } catch (error) {
-    console.error('Dashboard Error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-});
-
+// ====================== VERIFY STATUS ======================
 router.get('/verify-status', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
@@ -313,6 +309,83 @@ router.get('/verify-status', async (req, res) => {
   } catch (error) {
     console.error('Verify Status Error:', error);
     res.status(500).json({ message: 'Server Error' });
+  }
+});
+
+// ====================== DASHBOARD ======================
+router.get('/dashboard', authenticateToken, async (req, res) => {
+  try {
+    const buyer = await Buyer.findById(req.user.id).select('fullName email _id profileImg');
+
+    if (!buyer)
+      return res.status(404).json({ message: 'Buyer not found' });
+
+    res.status(200).json({
+      fullName: buyer.fullName,
+      email: buyer.email,
+      buyerId: buyer._id,
+      profileImg: buyer.profileImg,
+    });
+  } catch (error) {
+    console.error('Dashboard Error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+// ====================== UPDATE PROFILE ======================
+router.put('/update-profile', authenticateToken, upload.single('profileImg'), async (req, res) => {
+  try {
+    const buyer = await Buyer.findById(req.user.id);
+    if (!buyer) return res.status(404).json({ message: 'Buyer not found' });
+
+    const { fullName } = req.body;
+    if (fullName) buyer.fullName = fullName;
+
+if (req.file) {
+  buyer.profileImg = {
+    data: `/uploads/${req.file.filename}`, // store file path
+    contentType: req.file.mimetype,        // store MIME type
+  };
+}
+
+    await buyer.save();
+
+    res.status(200).json({
+      message: 'Profile updated successfully',
+      buyer: {
+        _id: buyer._id,
+        fullName: buyer.fullName,
+        email: buyer.email,
+        profileImg: buyer.profileImg,
+      },
+    });
+  } catch (error) {
+    console.error('Update Profile Error:', error);
+    res.status(500).json({ message: 'Server Error' });
+  }
+});
+// PUT /buyers/change-password
+router.put('/change-password', authenticateToken, async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const buyer = await Buyer.findById(req.user.id);
+  if (!buyer) return res.status(404).json({ message: 'Buyer not found' });
+
+  const isMatch = await bcrypt.compare(currentPassword, buyer.password);
+  if (!isMatch) return res.status(400).json({ message: 'Current password is incorrect' });
+
+  buyer.password = await bcrypt.hash(newPassword, 10);
+  await buyer.save();
+
+  res.json({ message: 'Password updated successfully' });
+});
+// DELETE /buyers/delete-account
+router.delete('/delete-account', authenticateToken, async (req, res) => {
+  try {
+    await Buyer.findByIdAndDelete(req.user.id);
+    res.json({ message: 'Account deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Failed to delete account' });
   }
 });
 
